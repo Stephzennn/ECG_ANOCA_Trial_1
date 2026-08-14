@@ -79,16 +79,20 @@ class PTBXL_Dataset(torch.utils.data.Dataset):
     
 saved_dir = './res/eval'
 csv_filepath = './csv/ptbxl_label.csv'
-ecg_filepath = 'your_path/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/'
+ecg_filepath = './data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/'
+
+
 tasks = []
 batch_size = 512
-with open(os.path.join('./tasks.txt'), 'r') as fin:
+with open(os.path.join('./tasks.txt'), 'r') as fin: 
     for line in fin:
         tasks.append(line.strip())
 
 testset = PTBXL_Dataset(ecg_path=ecg_filepath, csv_path=csv_filepath)
-testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count())
+testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers= 0) #(os.cpu_count())
 device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
+
+print(device)
 
 ### make model
 model = Net1D(
