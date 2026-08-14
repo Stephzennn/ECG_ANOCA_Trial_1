@@ -1,9 +1,9 @@
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
-data/
+/Models/ECGFounder-master/ECGFounder-master/data/
 ptb-xl/
-checkpoints/
+\Models\ECGFounder-master\ECGFounder-master\checkpoint/
 *.pt
 *.pth
 .env
