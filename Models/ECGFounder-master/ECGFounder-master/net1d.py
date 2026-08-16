@@ -8,6 +8,7 @@ import numpy as np
 from collections import Counter
 from matplotlib import pyplot as plt
 
+from sklearn.decomposition import PCA
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -394,6 +395,8 @@ class Net1D(nn.Module):
         else:
             return out
 
+
+
 if __name__ == "__main__":
   model = Net1D(
       in_channels=12, 
@@ -407,5 +410,8 @@ if __name__ == "__main__":
       verbose=True, 
       use_bn=False,
       use_do=False,
-      n_classes=150)
-  print(model)
+      n_classes=150,
+      return_features=True)
+  
+
+# The origianl model already returns the punultimate embedding as deep_features.
