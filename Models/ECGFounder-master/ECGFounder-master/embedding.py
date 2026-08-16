@@ -128,10 +128,22 @@ all_embeddings = np.concatenate(all_embeddings)
 labels = np.concatenate(all_gt)
 df_gt = pd.DataFrame(all_gt)
 
-type(df_gt) 
+all_gt.shape
+
+afib_gt = all_gt[:, 2]
+
+afib_gt = afib_gt.reshape(afib_gt.shape[0], 1)
+afib_pred_prob = all_pred_prob[:, 2]
+
+afib_pred_prob = afib_pred_prob.reshape(afib_pred_prob.shape[0], 1)
+
+afib_gt.shape, afib_pred_prob.shape
+res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds = eval_with_dynamic_thresh(afib_gt, afib_pred_prob)
+
+
 label_two = []
 for x in range(df_gt.shape[0]):
-    if df_gt.iloc[x][93] == 1:
+    if df_gt.iloc[x][2] == 1:
         label_two.append(1)
     else:
         label_two.append(0)
@@ -171,9 +183,6 @@ def run_tsne(embeddings, n_samples):
 tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
 
 print(tsne_results.shape)
-
-labels = np.random.randint(0, 2, size=all_embeddings.shape[0])
-
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +227,54 @@ def save_individual_plot(z, labels, out_path):
 out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"embedding_tsne.png")
 
 save_individual_plot(tsne_results, label_two, out_path)
+
+
+
+# Plot roc curve 
+import matplotlib.pyplot as plt
+import sklearn.metrics as metrics
+# calculate the fpr and tpr for all thresholds of the classification
+fpr, tpr, threshold = metrics.roc_curve(afib_gt, afib_pred_prob)
+roc_auc = metrics.auc(fpr, tpr)
+roc_auc = res_test_auroc
+
+pr_auc = metrics.average_precision_score(afib_gt, afib_pred_prob)
+
+
+prec, rec, _ = metrics.precision_recall_curve(afib_gt, afib_pred_prob)
+auc_val = average_precision_score(afib_gt, afib_pred_prob)
+plt.title('Receiver Operating Characteristic')
+plt.legend(loc = 'lower right')
+#plt.gca().invert_xaxis()
+plt.plot(rec, prec, lw=1.8,
+                   label = 'PR_AUC = %0.2f' % auc_val)
+plt.xlabel("Recall")
+plt.ylabel("Precision")
+plt.title("Precision–Recall Curve")
+plt.axhline(afib_gt.mean(), color="red", linestyle="--")
+out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"PRAuc_CurveNORMAL ECG.png")
+
+plt.savefig(out_path_prauc)
+
+# method I: plt
+
+
+
+
+plt.title('Receiver Operating Characteristic')
+plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % roc_auc)
+plt.legend(loc = 'lower right')
+plt.plot([0, 1], [0, 1],'r--')
+plt.xlim([0, 1])
+plt.ylim([0, 1])
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+out_path_auc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"Auc_CurveNORMAL ECG.png")
+
+plt.savefig(out_path_auc)
+
+plt.show()
+
+
+plt.close()
+
