@@ -28,18 +28,9 @@ import torchvision.transforms as transforms
 from scipy.interpolate import interp1d
 #from sklearn.decomposition import PCA , TSNE
 from sklearn.manifold import TSNE
-device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
+import matplotlib.pyplot as plt
+import sklearn.metrics as metrics
 
-print(device)
-
-
-saved_dir = './res/eval'
-csv_filepath = './csv/ptbxl_label.csv'
-ecg_filepath = './data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/'
-
-
-all_embeddings = []
-all_labels = []
 
 def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers = 0 ):
     from ptbxlModule import PTBXL_Dataset
@@ -55,28 +46,6 @@ def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers 
 
     return testset, testloader
 
-testset, testloader = createDataloader('./tasks.txt', 512, ecg_filepath,csv_filepath)
-
-
-
-#------------------
-
-model = Net1D(
-      in_channels=12, 
-      base_filters=64, #32 64
-      ratio=1, 
-      filter_list=[64,160,160,400,400,1024,1024],    #[16,32,32,80,80,256,256] [32,64,64,160,160,512,512] [64,160,160,400,400,1024,1024]
-      m_blocks_list=[2,2,2,3,3,4,4],   #[2,2,2,2,2,2,2] [2,2,2,3,3,4,4]
-      kernel_size=16, 
-      stride=2, 
-      groups_width=16,
-      verbose= False, 
-      use_bn=False,
-      use_do=False,
-      n_classes=150,
-      return_features=True)
-
-model.to(device)
 
 def loadWeightsToModel(weightPath,model,device):
     checkpoint = torch.load(weightPath, map_location=device)
@@ -92,48 +61,6 @@ def loadWeightsToModel(weightPath,model,device):
     model.eval()
     return log
     
-log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
-
-"""
-checkpoint = torch.load('./checkpoint/12_lead_ECGFounder.pth', map_location=device)
-state_dict = checkpoint['state_dict']
-
-log = model.load_state_dict(state_dict, strict=False)
-
-for name, param in model.named_parameters():
-    param.requires_grad = False
-
-model.to(device)
-
-model.eval()
-
-"""
-
-
-# Here try to exract the deep features for every sample and the labels
-
-"""
-prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
-all_gt = []
-all_pred_prob = []
-all_thre_df = []
-all_embeddings = []
-
-with torch.no_grad():
-    for batch_idx, batch in enumerate(prog_iter_test):
-        input_x, input_y = tuple(t.to(device) for t in batch)
-        logits, deep_features = model(input_x)
-        pred = F.sigmoid(logits)
-        all_pred_prob.append(pred.cpu().data.numpy())
-        all_gt.append(input_y.cpu().data.numpy())
-        all_embeddings.append(deep_features.cpu().data.numpy())
-all_pred_prob = np.concatenate(all_pred_prob)
-all_gt = np.concatenate(all_gt)
-all_embeddings = np.concatenate(all_embeddings)
-labels = np.concatenate(all_gt)
-df_gt = pd.DataFrame(all_gt)
-
-"""
 
 def generateOutput(testloader, model, device):
     prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
@@ -157,7 +84,6 @@ def generateOutput(testloader, model, device):
     df_gt = pd.DataFrame(all_gt)
     return all_gt, all_embeddings, df_gt, labels, all_pred_prob
 
-all_gt, all_embeddings, df_gt, labels, all_pred_prob = generateOutput(testloader, model, device)
 
 
 def extractResults(task: int, all_gt, all_pred_prob, taskPath):
@@ -191,7 +117,6 @@ def extractResults(task: int, all_gt, all_pred_prob, taskPath):
     return res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, dd
     
 
-res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(5, all_gt, all_pred_prob,'./tasks.txt')
 
 # For every output, extract PCA components of 50. and save it in a new file.
 
@@ -216,17 +141,9 @@ def run_tsne(embeddings, n_samples):
     )
     return tsne.fit_transform(embeddings)
 
-
-tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
-
-print(tsne_results.shape)
-
-
 # ---------------------------------------------------------------------------
 # Plot helpers
 # ---------------------------------------------------------------------------
-
-
 
 def save_individual_plot(z, labels, out_path, taskName):
     n_total = len(labels)
@@ -257,57 +174,84 @@ def save_individual_plot(z, labels, out_path, taskName):
     plt.close(fig)
     print(f"  Saved → {out_path}")
 
-out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"Trialembedding_tsne.png")
-
-save_individual_plot(tsne_results, label_two, out_path, TaskName)
-
-
-
 # Plot roc curve 
-import matplotlib.pyplot as plt
-import sklearn.metrics as metrics
-# calculate the fpr and tpr for all thresholds of the classification
-fpr, tpr, threshold = metrics.roc_curve(afib_gt, afib_pred_prob)
-roc_auc = metrics.auc(fpr, tpr)
-roc_auc = res_test_auroc
 
-pr_auc = metrics.average_precision_score(afib_gt, afib_pred_prob)
+def plotSavePRAUC(groundTruth, prediction_Probability, outputPath ):
+    prec, rec, _ = metrics.precision_recall_curve(groundTruth, prediction_Probability)
+    auc_val = average_precision_score(groundTruth, prediction_Probability)
+    plt.legend(loc = 'lower right')
+    plt.plot(rec, prec, lw=1.8,
+                    label = 'PR_AUC = %0.2f' % auc_val)
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Precision–Recall Curve ")
+    plt.axhline(groundTruth.mean(), color="red", linestyle="--")
+    plt.savefig(outputPath)
 
-
-prec, rec, _ = metrics.precision_recall_curve(afib_gt, afib_pred_prob)
-auc_val = average_precision_score(afib_gt, afib_pred_prob)
-plt.title('Receiver Operating Characteristic')
-plt.legend(loc = 'lower right')
-#plt.gca().invert_xaxis()
-plt.plot(rec, prec, lw=1.8,
-                   label = 'PR_AUC = %0.2f' % auc_val)
-plt.xlabel("Recall")
-plt.ylabel("Precision")
-plt.title("Precision–Recall Curve")
-plt.axhline(afib_gt.mean(), color="red", linestyle="--")
-out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"PRAuc_CurveNORMAL ECG.png")
-
-plt.savefig(out_path_prauc)
-
-# method I: plt
-
-
-
-
-plt.title('Receiver Operating Characteristic')
-plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % roc_auc)
-plt.legend(loc = 'lower right')
-plt.plot([0, 1], [0, 1],'r--')
-plt.xlim([0, 1])
-plt.ylim([0, 1])
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-out_path_auc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"Auc_CurveNORMAL ECG.png")
-
-plt.savefig(out_path_auc)
-
-plt.show()
+# ROC AUC
+def plotSaveROCAUC(groundTruth, prediction_Probability, outputPath ):
+    fpr, tpr, threshold = metrics.roc_curve(groundTruth,prediction_Probability)
+    roc_auc = metrics.auc(fpr, tpr)
+    plt.title('Receiver Operating Characteristic')
+    plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % roc_auc )
+    plt.legend(loc = 'lower right')
+    plt.plot([0, 1], [0, 1],'r--')
+    plt.xlim([0, 1])
+    plt.ylim([0, 1])
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    plt.savefig(outputPath)
+    plt.show()
 
 
-plt.close()
+
+
+if __name__ == "__main__":
+    device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
+    print(device)
+
+    saved_dir = './res/eval'
+    csv_filepath = './csv/ptbxl_label.csv'
+    ecg_filepath = './data/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3/'
+    all_embeddings = []
+    all_labels = []
+    testset, testloader = createDataloader('./tasks.txt', 512, ecg_filepath,csv_filepath)
+    model = Net1D(
+      in_channels=12, 
+      base_filters=64, #32 64
+      ratio=1, 
+      filter_list=[64,160,160,400,400,1024,1024],    #[16,32,32,80,80,256,256] [32,64,64,160,160,512,512] [64,160,160,400,400,1024,1024]
+      m_blocks_list=[2,2,2,3,3,4,4],   #[2,2,2,2,2,2,2] [2,2,2,3,3,4,4]
+      kernel_size=16, 
+      stride=2, 
+      groups_width=16,
+      verbose= False, 
+      use_bn=False,
+      use_do=False,
+      n_classes=150,
+      return_features=True)
+
+    model.to(device)
+
+
+    log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
+    all_gt, all_embeddings, df_gt, labels, all_pred_prob = generateOutput(testloader, model, device)
+    TaskNumberID = 5
+    res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt')
+    
+    tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
+    
+    print(tsne_results.shape)
+    out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"Trialembedding_tsne.png")
+
+    save_individual_plot(tsne_results, label_two, out_path, TaskName)
+    out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialPRAuc_CurveNORMAL ECG.png")
+
+    plotSavePRAUC( afib_gt, afib_pred_prob,out_path_prauc )
+    out_path_auc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialAuc_CurveNORMAL ECG.png")
+    plt.close()
+    plotSaveROCAUC(afib_gt, afib_pred_prob,out_path_auc)
+    plt.close()
+
+
 
