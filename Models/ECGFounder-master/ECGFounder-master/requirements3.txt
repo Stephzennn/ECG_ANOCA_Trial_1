@@ -6,6 +6,7 @@ matplotlib==3.10.1
 h5py==3.14.0
 tqdm==4.66.5
 wfdb==4.2.0
+neurokit2==0.2.12
 
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.4.0+cu121
