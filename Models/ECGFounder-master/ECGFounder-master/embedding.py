@@ -86,7 +86,7 @@ def generateOutput(testloader, model, device):
 
 
 
-def extractResults(task: int, all_gt, all_pred_prob, taskPath):
+def extractResults(task: int, all_gt, all_pred_prob, taskPath ,df_gt):
     dd = "Place Holder"
     counter = 0
     with open(os.path.join(taskPath), 'r') as fin: 
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
     all_gt, all_embeddings, df_gt, labels, all_pred_prob = generateOutput(testloader, model, device)
     TaskNumberID = 5
-    res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt')
+    res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt', df_gt)
     
     tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
     
