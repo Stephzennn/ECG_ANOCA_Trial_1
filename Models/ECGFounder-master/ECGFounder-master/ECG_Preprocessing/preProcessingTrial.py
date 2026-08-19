@@ -17,7 +17,7 @@ sampling_rate = record.sr
 
 
 original_fs = sampling_rate   # Sampling rate in the ISHNE header
-target_fs = 500  # Desired sampling rate
+target_fs = 100  # Desired sampling rate
 
 # Resample Signal to 500 from 256
 
@@ -54,25 +54,6 @@ print("Lead names:", lead_names)
 print("Signal shape:", signals.shape)
 
 
-"""
-type(signals)
-
-signals.shape
-
-
-dd = signals.shape
-
-print(dd)
-
-dd1 = dd[1]
-
-print(dd1)
-for leads in range(signals.shape[1]):
-    print(leads)
-
-"""
-
-
 duration = 100
 number_of_samples = min(
     signals.shape[0],
@@ -98,25 +79,7 @@ axes[-1].set_xlabel("Time (seconds)")
 plt.tight_layout()
 plt.show()
 
-"""
-firstLead = signals[:, 0]
 
-
-
-
-original_fs = sampling_rate   # Sampling rate in the ISHNE header
-target_fs = 500
-
-firstLead_resampled = nk.signal_resample(
-    firstLead,
-    sampling_rate=original_fs,
-    desired_sampling_rate=target_fs,
-    method="poly"
-)
-
-signals[:, 0] = firstLead_resampled
-
-"""
 
 listOfNewLeads = []
 
@@ -141,6 +104,8 @@ print(f.shape)
 f = f.T
 print(f.shape)
 
+
+"""
 for x in range(len(f)):
     print(f[x])
     #print(type(f[x]))
@@ -152,7 +117,7 @@ type(signals)
 
 signals.shape
 
-
+"""
 def Plot(signals, sampling_rate):
     
 

@@ -8,8 +8,6 @@ import os
 from net1d import Net1D
 import torch
 
-
-
 from embedding import createDataloader, loadWeightsToModel, generateOutput, extractResults
 
 #extractResults()

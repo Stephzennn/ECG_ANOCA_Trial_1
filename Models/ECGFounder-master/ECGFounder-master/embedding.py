@@ -66,13 +66,14 @@ def generateOutput(testloader, model, device):
     prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
     all_gt = []
     all_pred_prob = []
-    all_thre_df = []
+    all_logits = []
     all_embeddings = []
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(prog_iter_test):
             input_x, input_y = tuple(t.to(device) for t in batch)
             logits, deep_features = model(input_x)
+            all_logits.append(logits.detach().cpu().numpy())
             pred = F.sigmoid(logits)
             all_pred_prob.append(pred.cpu().data.numpy())
             all_gt.append(input_y.cpu().data.numpy())
@@ -82,7 +83,7 @@ def generateOutput(testloader, model, device):
     all_embeddings = np.concatenate(all_embeddings)
     labels = np.concatenate(all_gt)
     df_gt = pd.DataFrame(all_gt)
-    return all_gt, all_embeddings, df_gt, labels, all_pred_prob
+    return all_gt, all_embeddings, df_gt, labels, all_pred_prob , all_logits
 
 
 
