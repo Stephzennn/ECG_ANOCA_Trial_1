@@ -10,6 +10,7 @@ from captum.attr import LayerConductance
 from captum.attr import Lime
 from captum.attr import NeuronConductance
 from embedding import createDataloader, loadWeightsToModel, generateOutput
+import numpy as np
 
 if __name__ == "__main__":
     device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     len(all_logits)
     type(all_logits[0])
 
-    import numpy as np
+    
 
     ttr = np.empty(all_logits[0].shape)
 
@@ -61,14 +62,14 @@ if __name__ == "__main__":
         ttr = np.vstack((ttr,all_logits[x] ))
         #print(all_logits[x].shape)
 
-    print(all_logits[0].shape)
+    print(ttr.shape)
 
    
 
 
     # The all_pred_prob refer to the output logits.
     #out_logits = model(test_input_tensor).detach().numpy() 
-    logits, deep_features = model(input_x)
+    #logits, deep_features = model(input_x)
 
 
     out_logits = ttr
@@ -77,4 +78,24 @@ if __name__ == "__main__":
 
     ig = IntegratedGradients(model)
 
-    
+    target = 5
+
+    type(testset.data)
+
+    print(testset.data.shape[0])
+    # The testset takes in the number of samples.
+    dd = testset.__getitem__(21798)
+
+    print(dd[0].shape)
+    type(dd)
+
+    inputTrial = []
+
+    #print()
+    for x in range(testset.data.shape[0]):
+            if x % 1000 == 0 :
+                print(x)
+            inputTrial.append(testset.__getitem__(x)[0] )
+
+    len(inputTrial)
+    print(inputTrial.shape)
