@@ -32,8 +32,11 @@ import matplotlib.pyplot as plt
 import sklearn.metrics as metrics
 
 
-def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers = 0 ):
+def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers = 0, ScienceDB =False ):
     from ptbxlModule import PTBXL_Dataset
+    if ScienceDB == True:
+        from ScienceDB_Dataset import ScienceDB_Dataset
+        #ptbxlModule import PTBXL_Dataset
     tasks = []
     batch_size = batch_Size
     #'./tasks.txt'
@@ -41,7 +44,11 @@ def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers 
         for line in fin:
             tasks.append(line.strip())
     #csv_filepath
-    testset = PTBXL_Dataset(ecg_path=ecg_filepath, csv_path=csv_path)
+    if ScienceDB_Dataset == False:
+        testset = PTBXL_Dataset(ecg_path=ecg_filepath, csv_path=csv_path)
+    else:
+        testset = ScienceDB_Dataset(ecg_path=ecg_filepath, csv_path=csv_path)
+
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers= num_workers) #(os.cpu_count())
 
     return testset, testloader
@@ -208,6 +215,7 @@ def plotSaveROCAUC(groundTruth, prediction_Probability, outputPath ):
 
 
 if __name__ == "__main__":
+    """
     device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
     print(device)
 
@@ -237,7 +245,7 @@ if __name__ == "__main__":
 
     log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
     all_gt, all_embeddings, df_gt, labels, all_pred_prob = generateOutput(testloader, model, device)
-    TaskNumberID = 5
+    TaskNumberID = 2
     res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt', df_gt)
     
     tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
@@ -253,6 +261,54 @@ if __name__ == "__main__":
     plt.close()
     plotSaveROCAUC(afib_gt, afib_pred_prob,out_path_auc)
     plt.close()
+    """
+    # Change the paths 
+    saved_dir = './res/ScienceDBeval'
+    csv_filepath = './csv/ScienceDB_label.csv'
+    ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data'
 
+    device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
+    all_embeddings = []
+    all_labels = []
+    testset, testloader = createDataloader('./tasks.txt', 500, ecg_filepath,csv_filepath,ScienceDB=True)
+    model = Net1D(
+        in_channels=12, 
+        base_filters=64, #32 64
+        ratio=1, 
+        filter_list=[64,160,160,400,400,1024,1024],    #[16,32,32,80,80,256,256] [32,64,64,160,160,512,512] [64,160,160,400,400,1024,1024]
+        m_blocks_list=[2,2,2,3,3,4,4],   #[2,2,2,2,2,2,2] [2,2,2,3,3,4,4]
+        kernel_size=16, 
+        stride=2, 
+        groups_width=16,
+        verbose= False, 
+        use_bn=False,
+        use_do=False,
+        n_classes=150,
+        return_features=True)
+    model.to(device)
+    log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
+    #prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
+
+    #for idx , batch in enumerate(prog_iter_test):
+     #   print(idx)
+    #    print(len(batch[0].shape))
+    all_gt, all_embeddings, df_gt, labels, all_pred_prob , all_logits = generateOutput(testloader, model, device)
+    TaskNumberID = 0
+    tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
+    print(tsne_results.shape)
+    out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBNembedding_tsne.png")
+    res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt', df_gt)
+
+    TaskName = "ANOCA"
+    label_two
+    save_individual_plot(tsne_results, label_two, out_path, TaskName)
+
+    out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBPRAuc_CurveNORMAL ECG.png")
+    
+    plotSavePRAUC( afib_gt, afib_pred_prob,out_path_prauc )
+    out_path_auc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBAuc_CurveNORMAL ECG.png")
+    plt.close()
+    plotSaveROCAUC(afib_gt, afib_pred_prob,out_path_auc)
+    plt.close()
 
 
