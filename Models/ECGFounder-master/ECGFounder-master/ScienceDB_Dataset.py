@@ -11,7 +11,6 @@ class ScienceDB_Dataset(torch.utils.data.Dataset):
     def __init__(self, ecg_path, csv_path):
         self.data = pd.read_csv(csv_path)
         "here read from the pickle file"
-        #self.data = pd.read_pickle(picklePath)
         self.data = self.data.dropna(subset=['filename_hr', 'label'])
         self.fs = 5000
         self.ecg_path = ecg_path
