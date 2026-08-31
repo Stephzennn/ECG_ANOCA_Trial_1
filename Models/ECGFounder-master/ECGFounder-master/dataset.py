@@ -7,7 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from scipy.signal import medfilt, iirnotch, filtfilt, butter, resample
 from util import filter_bandpass
-
+from scipy.interpolate import interp1d
 
 class LVEF_12lead_cls_Dataset(Dataset):
     def __init__(self, ecg_path, labels_df, transform=None):
@@ -24,7 +24,7 @@ class LVEF_12lead_cls_Dataset(Dataset):
         self.new_leads = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'] # leads of MIMIC-ECG are different with leads of HEEDB
         self.fs = 5000 # length of data, 5000 = 500Hz * 10s
         self.lead_indices = [self.input_leads.index(lead) for lead in self.new_leads]
-
+        self.sample_rate = 500
     def __len__(self):
         return len(self.labels_df)
 
@@ -74,7 +74,7 @@ class LVEF_12lead_cls_Dataset(Dataset):
         data = np.transpose(data,  (1, 0))
         data = data[self.lead_indices, :]
         data = filter_bandpass(data, 500) 
-        signal = self.resample_unequal(data, sample_rate, self.fs)
+        signal = self.resample_unequal(data, self.sample_rate, self.fs)
         signal = self.z_score_normalization(data)
         signal = torch.FloatTensor(signal)
 
