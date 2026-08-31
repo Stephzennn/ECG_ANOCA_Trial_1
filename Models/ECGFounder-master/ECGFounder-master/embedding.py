@@ -287,24 +287,15 @@ if __name__ == "__main__":
         return_features=True)
     model.to(device)
     log = loadWeightsToModel('./checkpoint/12_lead_ECGFounder.pth', model, device)
-    #prog_iter_test = tqdm(testloader, desc="Testing", leave=False)
-
-    #for idx , batch in enumerate(prog_iter_test):
-     #   print(idx)
-    #    print(len(batch[0].shape))
     all_gt, all_embeddings, df_gt, labels, all_pred_prob , all_logits = generateOutput(testloader, model, device)
     TaskNumberID = 0
     tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
     print(tsne_results.shape)
     out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBNembedding_tsne.png")
     res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, all_gt, all_pred_prob,'./tasks.txt', df_gt)
-
     TaskName = "ANOCA"
-    label_two
     save_individual_plot(tsne_results, label_two, out_path, TaskName)
-
     out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBPRAuc_CurveNORMAL ECG.png")
-    
     plotSavePRAUC( afib_gt, afib_pred_prob,out_path_prauc )
     out_path_auc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"TrialScienceDBAuc_CurveNORMAL ECG.png")
     plt.close()
