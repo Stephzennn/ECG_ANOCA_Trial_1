@@ -9,7 +9,9 @@ from scipy.interpolate import interp1d
 import torch
 import json
 
-csv_filepath = './csv/ScienceDB_label.csv'
+#csv_filepath = './csv/ScienceDB_label.csv'
+
+csv_filepath = './csv/ScienceDB_label_stress.csv'
 picklePath = './csv/ScienceDB_label.pkl'
 #ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data/sub_001/sub_001_baseline-data_rest-ecg-500hz.csv'
 ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data'
@@ -37,53 +39,71 @@ duration = 10
 
 folder_path = Path("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data")
 
-#Here we cut each patients ECG data into slices of 10 seconds.
-for file_path in folder_path.iterdir():
-    if file_path.name[0:3] == "sub":
-        words = ["baseline","data", "rest", "500hz" ]
-        target_dir  = file_path / "records500"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        for csvFile in file_path.iterdir():
-            contains_word = all(
-                    word.lower() in (csvFile.name).lower()
-                            for word in words
+#Here we cut each patients ECG data into slices of 10 seconds. This is for the Rest data. 
+
+#Inputs for the baseline
+wordss = ["baseline","data", "rest", "500hz" ]
+target_dir_name = "records500"
+
+# Inputs for the stress ecg
+
+wordsStress = ["experimental", "stress", "500hz", "data"]
+target_dir_nameStress = "records500_Stress"
+
+def segmentAndFileEcg(wordss, target_dir_name, folder_path ):
+    for file_path in folder_path.iterdir():
+        if file_path.name[0:3] == "sub":
+            words = wordss
+            target_dir  = file_path / target_dir_name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for csvFile in file_path.iterdir():
+                contains_word = all(
+                        word.lower() in (csvFile.name).lower()
+                                for word in words
+                            )
+                if (contains_word) == True:
+                    ecg_signal = pd.read_csv(
+                        csvFile,
+                        header=None,
+                        nrows=12,
+                        dtype="float32"
+                    ).to_numpy().T
+                    count = 0
+                    nameCount = 0
+                    while True:
+                        if count > ecg_signal.shape[0]:
+                            break
+                        ecg_signal_ten_seconds = ecg_signal[count:count + (fs * 10),:]
+                        ecg_signal_ten_seconds = np.asarray(ecg_signal_ten_seconds, dtype=np.float64)
+                        print(ecg_signal_ten_seconds.shape)
+                        if ecg_signal_ten_seconds.shape[0] < 5000:
+                            break
+                        wfdb.wrsamp(
+                            record_name= str(nameCount) + '_10seconds',
+                            fs=500,  # Sampling frequency in Hz
+                            units=["mV"] * 12,
+                            sig_name= lead_names,
+                            p_signal=ecg_signal_ten_seconds,
+                            write_dir= target_dir
                         )
-            if (contains_word) == True:
-                ecg_signal = pd.read_csv(
-                    csvFile,
-                    header=None,
-                    nrows=12,
-                    dtype="float32"
-                ).to_numpy().T
-                count = 0
-                nameCount = 0
-                while True:
-                    if count > ecg_signal.shape[0]:
-                        break
-                    ecg_signal_ten_seconds = ecg_signal[count:count + (fs * 10),:]
-                    ecg_signal_ten_seconds = np.asarray(ecg_signal_ten_seconds, dtype=np.float64)
-                    print(ecg_signal_ten_seconds.shape)
-                    if ecg_signal_ten_seconds.shape[0] < 5000:
-                        break
-                    wfdb.wrsamp(
-                        record_name= str(nameCount) + '_10seconds',
-                        fs=500,  # Sampling frequency in Hz
-                        units=["mV"] * 12,
-                        sig_name= lead_names,
-                        p_signal=ecg_signal_ten_seconds,
-                        write_dir= target_dir
-                    )
-                    count += (fs * 10)
-                    nameCount += 1
-                print(target_dir)
+                        count += (fs * 10)
+                        nameCount += 1
+                    print(target_dir)
 
 
 
-def turnTo150Output(classs ):
+# Inputs for the stress ecg
+
+wordsStress = ["experimental", "stress", "500hz", "data"]
+target_dir_nameStress = "records500_Stress"
+segmentAndFileEcg(wordsStress, target_dir_nameStress, folder_path)
+
+
+def turnTo150Output(classs , position = 0 ):
     t = np.zeros([150]).astype(int)
     t = list(t)
     if classs == 1:
-        t[0] = 1
+        t[position] = 1
         return t
     else:
         #t[2] = 1
@@ -96,7 +116,7 @@ for file_path in folder_path.iterdir():
     if file_path.name[0:3] == "sub":
         patientID = int(file_path.name[4:])
         words = ['disease' , 'json']
-        for recordName in (file_path / "records500").iterdir():
+        for recordName in (file_path / target_dir_nameStress).iterdir():
             relativePath = (recordName.relative_to("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data"))
             relativePath =  relativePath.with_suffix("").as_posix()
             tempList = []
@@ -110,7 +130,7 @@ for file_path in folder_path.iterdir():
                         if contains_word == True:
                             with open(csvFile, "r") as file:
                                 disease_data = json.load(file)
-                            output150 = turnTo150Output(disease_data['ANOCA'])
+                            output150 = turnTo150Output(disease_data['ANOCA'], 0)
                             tempList.append(disease_data['ANOCA'])
                             tempList.append(str(output150))
                             temListmeta.append(tempList)
@@ -118,13 +138,13 @@ for file_path in folder_path.iterdir():
 
 dfTemp = pd.DataFrame(temListmeta, columns=['patient_id', 'filename_hr','BinaryLabel', 'label',  ])
 
-
+dfTemp
 #output_path_pickle = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label.pkl"
 
 
 # Save the label csv
 
-output_path = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label.csv"
+output_path = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label_stress.csv"
 
 dfTemp.to_csv(output_path, index=False)
 
