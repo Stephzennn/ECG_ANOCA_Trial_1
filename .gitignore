@@ -3,7 +3,15 @@ __pycache__/
 .ipynb_checkpoints/
 /Models/ECGFounder-master/ECGFounder-master/data/
 ptb-xl/
-\Models\ECGFounder-master\ECGFounder-master\checkpoint/
+/Models/ECGFounder-master/ECGFounder-master/checkpoint/
 *.pt
 *.pth
 .env
+
+# Loose figures, slide decks and archives dropped in the project root
+/*.png
+/*.jpg
+/*.JPG
+/*.zip
+/*.pptx
+/Image Collection/

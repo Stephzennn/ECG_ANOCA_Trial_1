@@ -1,6 +1,4 @@
 
-
-
 import os
 import numpy as np
 import pandas as pd
@@ -264,8 +262,8 @@ if __name__ == "__main__":
     """
     # Change the paths 
     saved_dir = './res/ScienceDBeval_stress'
-    #csv_filepath = './csv/ScienceDB_label.csv'
-    csv_filepath = './csv/ScienceDB_label_stress.csv'
+    csv_filepath = './csv/ScienceDB_label.csv'
+    #csv_filepath = './csv/ScienceDB_label_stress.csv'
     ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data'
 
     device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
@@ -293,8 +291,9 @@ if __name__ == "__main__":
     binary = []
     for x in all_gt:
         #x[5]
-        binary.append(x[5])
-
+        #binary.append(x[5])
+        binary.append(sum(x))
+    
     
     def turnTo150Output(classs , position = 0 ):
         t = np.zeros([150]).astype(int)
@@ -343,7 +342,7 @@ if __name__ == "__main__":
         # using that csv, and the tasknumber, do 
 
 
-binary
+#binary
 
 tasks = []
 with open(os.path.join('./tasks.txt'), 'r') as fin: 
@@ -368,10 +367,12 @@ for y in NewDict.keys():
     newDT = pd.DataFrame(newArray)
 
     
-
+    #(abs(((sorted_nested_dict[x]['AUC']) - 0.5)))
     TaskNumberID = y
     res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, newArray, all_pred_prob,'./tasks.txt', newDT)
     NewDict[y]["AUC"] = res_test_auroc
+    NewDict[y]["Absolute_AUC"] = (abs(((NewDict[y]['AUC']) - 0.5)))
+    NewDict[y]["Name"] = TaskName
     NewDict[y]["F1"] = res_test_f1
     NewDict[y]["Sen"] = res_test_sens
     NewDict[y]["Spec"] = res_test_spec
@@ -395,22 +396,17 @@ see = pd.DataFrame(NewDict)
 
 from operator import itemgetter
 
-NewDict
-
-data = {'apple': 5, 'banana': 2, 'cherry': 7}
-
 # Sort by value using itemgetter
 #sorted_dict = dict(sorted(data.items(), key=itemgetter(1)))
 
 #sorted_dict = dict(sorted(NewDict.items(), key=itemgetter(1)))
 #print(sorted_dict)
 
-sorted_nested_dict = dict(sorted(NewDict.items(), key=lambda x: (x[1]["AUC"]),reverse= True))
+sorted_nested_dict = dict(sorted(NewDict.items(), key=lambda x: (x[1]["Absolute_AUC"]),reverse= True))
 
 
-
-sorted_nested_dict.keys()
-
+for x in sorted_nested_dict.keys():
+    print(abs(((sorted_nested_dict[x]['AUC']) - 0.5)))
 
 for p in sorted_nested_dict.keys():
     print("AFIB For ", NewDict[p]["Name"], "        AUC", NewDict[p]["AUC"])
@@ -423,17 +419,21 @@ x_labels0 = []
 y_labels0 = []
 for x in sorted_nested_dict.keys():
 
-    if counter >= 10:
+    if counter >= 15:
         break
     counter += 1
-    print(sorted_nested_dict[x]["Sen"].item())
+    print(sorted_nested_dict[x]["Name"])
+    print(sorted_nested_dict[x]["AUC"].item())
     x_labels0.append(sorted_nested_dict[x]["Name"])
-    y_labels0.append(sorted_nested_dict[x]["Sen"].item())
+    y_labels0.append(sorted_nested_dict[x]["AUC"].item())
 
 x_labels0
 
 y_labels0
 #======================
+
+#logitAnoca+)=β0​+β1​(signed T-peak/QRS)+β2​(absolute T-area/QRS-area)+β3​(age)+β4​(heart rate)
+
 
 # Plot the above 
 import matplotlib.pyplot as plt
@@ -477,7 +477,7 @@ ax.bar(
 ax.set_ylim(0, 1)
 ax.set_ylabel("Score")
 ax.set_xlabel("ECG Label")
-ax.set_title("Model Scores by ECG Label For Atrial Fibrillation")
+ax.set_title("Model Scores by ECG Label For CMD Positive")
 
 ax.set_xticks(x_positions)
 ax.set_xticklabels(

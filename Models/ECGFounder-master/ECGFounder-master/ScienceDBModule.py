@@ -9,9 +9,9 @@ from scipy.interpolate import interp1d
 import torch
 import json
 
-#csv_filepath = './csv/ScienceDB_label.csv'
+csv_filepath = './csv/ScienceDB_label.csv'
 
-csv_filepath = './csv/ScienceDB_label_stress.csv'
+#csv_filepath = './csv/ScienceDB_label_stress.csv'
 picklePath = './csv/ScienceDB_label.pkl'
 #ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data/sub_001/sub_001_baseline-data_rest-ecg-500hz.csv'
 ecg_filepath = 'C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data'
@@ -42,7 +42,7 @@ folder_path = Path("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Mod
 #Here we cut each patients ECG data into slices of 10 seconds. This is for the Rest data. 
 
 #Inputs for the baseline
-wordss = ["baseline","data", "rest", "500hz" ]
+wordss = ["baseline","data", "rest", "500hz" ] 
 target_dir_name = "records500"
 
 # Inputs for the stress ecg
@@ -96,7 +96,7 @@ def segmentAndFileEcg(wordss, target_dir_name, folder_path ):
 
 wordsStress = ["experimental", "stress", "500hz", "data"]
 target_dir_nameStress = "records500_Stress"
-segmentAndFileEcg(wordsStress, target_dir_nameStress, folder_path)
+segmentAndFileEcg(wordss, target_dir_name, folder_path)
 
 
 def turnTo150Output(classs , position = 0 ):
@@ -116,7 +116,7 @@ for file_path in folder_path.iterdir():
     if file_path.name[0:3] == "sub":
         patientID = int(file_path.name[4:])
         words = ['disease' , 'json']
-        for recordName in (file_path / target_dir_nameStress).iterdir():
+        for recordName in (file_path / target_dir_name).iterdir():
             relativePath = (recordName.relative_to("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data"))
             relativePath =  relativePath.with_suffix("").as_posix()
             tempList = []
@@ -130,8 +130,10 @@ for file_path in folder_path.iterdir():
                         if contains_word == True:
                             with open(csvFile, "r") as file:
                                 disease_data = json.load(file)
-                            output150 = turnTo150Output(disease_data['ANOCA'], 0)
-                            tempList.append(disease_data['ANOCA'])
+                            #output150 = turnTo150Output(disease_data['ANOCA'], 0)
+                            output150 = turnTo150Output(disease_data['CMD'], 0)
+                            #tempList.append(disease_data['ANOCA']) #CMD
+                            tempList.append(disease_data['CMD'])
                             tempList.append(str(output150))
                             temListmeta.append(tempList)
 
@@ -144,7 +146,7 @@ dfTemp
 
 # Save the label csv
 
-output_path = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label_stress.csv"
+output_path = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label.csv"
 
 dfTemp.to_csv(output_path, index=False)
 

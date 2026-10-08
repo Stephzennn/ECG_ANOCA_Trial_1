@@ -17,7 +17,7 @@ sampling_rate = record.sr
 
 
 original_fs = sampling_rate   # Sampling rate in the ISHNE header
-target_fs = 100  # Desired sampling rate
+target_fs = 500  # Desired sampling rate
 
 # Resample Signal to 500 from 256
 
@@ -174,6 +174,8 @@ conduction abnormalities, including bundle-branch block
 
 
 """
+This part is for truning the 6 lead kardia signal data into an EDF form that can be read by the wfdb module. 
+
 THE BELOW DESCRIPTION IF TAKEN FROM THE GITHUB joelparkerhenderson/kardiamobile-6l-ecg-convert-pdf-to-edf-python
 
 KardiaMobile 6-lead file format converter from Kardia ECG PDF to EDF.
@@ -552,6 +554,8 @@ hrv_results = nk.hrv(
 )
 
 
+hrv_results
+
 fig = plt.gcf()
 fig.set_dpi(150)
 fig.set_size_inches(26, 20)
@@ -560,7 +564,7 @@ plt.tight_layout()
 plt.show()
 
 
-
+# Finish the T wave inversion 
 
 
 #nk.hrv(signals, sampling_rate=sampling_rate, show=True )
@@ -606,6 +610,7 @@ runtime_dll = (
 print(runtime_dll)
 print(runtime_dll.exists())
 
+
 from pathlib import Path
 from pecg.ecg.wavedet_exe import Wavdet
 
@@ -629,9 +634,41 @@ print(matlab_runtime_path.exists())
 import pecg 
 import numpy as np
 from pecg.ecg import Biomarkers as Bm
-from pecg.ecg import FiducialPoints as Fp
+from pecg.ecg import FiducialPoints as Fpp
+# Here try out examples
+
+from pecg import Preprocessing as Pre
+
+# This can give us a usability score 
+pre = Pre.Preprocessing(signals, sampling_rate)
+len(signals)
+bsqi_score = pre.bsqi()
+
+len(bsqi_score)
 
 # This is the location of matlab C:\Program Files\MATLAB\MATLAB Runtime
+
+
+#================== This is the biomarker detection
+
+
+fp = Fpp.FiducialPoints(signals, sampling_rate)
+
+peaks = fp.jqrs()
+fiducials = fp.wavedet(mcr_path, peaks)
+
+bm = Bm.Biomarkers(signals,sampling_rate, fiducials)
+intervals, interval_stats = bm.intervals()
+
+ints, stat_i = bm.intervals()
+waves, stat_w = bm.waves()
+
+intervals
+
+waves[0]['QRSarea']
+#====================
+
+
 
 signals = np.asarray(signals, dtype=np.float64)
 
@@ -709,3 +746,9 @@ for st_deviation_mvItem in st_deviation_mv:
         print("ST elevation of at least 0.1 mV")
     else:
         print("No substantial ST deviation")
+
+
+
+
+# Here we will try to extract as much as possible , no aggregation , just per beat. 
+
