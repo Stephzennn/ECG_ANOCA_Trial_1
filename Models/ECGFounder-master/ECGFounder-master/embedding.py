@@ -5,7 +5,6 @@ import pandas as pd
 from collections import Counter
 from matplotlib import pyplot as plt
 from sklearn.metrics import classification_report, confusion_matrix
-import os
 from shutil import copyfile
 import pickle
 import time
@@ -26,7 +25,6 @@ import torchvision.transforms as transforms
 from scipy.interpolate import interp1d
 #from sklearn.decomposition import PCA , TSNE
 from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
 import sklearn.metrics as metrics
 def createDataloader(task_Path, batch_Size, ecg_filepath, csv_path, num_workers = 0, ScienceDB =False ):
     from ptbxlModule import PTBXL_Dataset
@@ -110,13 +108,7 @@ def extractResults(task: int, all_gt, all_pred_prob, taskPath ,df_gt):
     afib_gt.shape, afib_pred_prob.shape
     res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds = eval_with_dynamic_thresh(afib_gt, afib_pred_prob)
 
-    label_two = []
-    for x in range(df_gt.shape[0]):
-        if df_gt.iloc[x][task] == 1:
-            label_two.append(1)
-        else:
-            label_two.append(0)
-    label_two = np.array(label_two)
+    label_two = (df_gt[task].values == 1).astype(int)
 
     return res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, dd
     
@@ -183,9 +175,9 @@ def save_individual_plot(z, labels, out_path, taskName):
 def plotSavePRAUC(groundTruth, prediction_Probability, outputPath ):
     prec, rec, _ = metrics.precision_recall_curve(groundTruth, prediction_Probability)
     auc_val = average_precision_score(groundTruth, prediction_Probability)
-    plt.legend(loc = 'lower right')
     plt.plot(rec, prec, lw=1.8,
                     label = 'PR_AUC = %0.2f' % auc_val)
+    plt.legend(loc = 'lower right')
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.title("Precision–Recall Curve ")
@@ -208,10 +200,79 @@ def plotSaveROCAUC(groundTruth, prediction_Probability, outputPath ):
     plt.show()
 
 
+def turnTo150Output(classs , position = 0 ):
+    t = [0] * 150
+    if classs == 1:
+        t[position] = 1
+    return t
+
+
+# AUC of every one of the 150 classes against the binary (ANOCA/CMD) label,
+# sorted by distance from 0.5
+def perClassAUC(binary, all_pred_prob, taskPath = './tasks.txt'):
+    tasks = []
+    with open(taskPath, 'r') as fin:
+        for line in fin:
+            tasks.append(line.strip())
+
+    NewDict = {}
+    for y in range(len(tasks)):
+        newArray = np.array([turnTo150Output(x, y) for x in binary])
+        newDT = pd.DataFrame(newArray)
+
+        res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(y, newArray, all_pred_prob, taskPath, newDT)
+        NewDict[y] = {
+            "Name": TaskName,
+            "AUC": res_test_auroc,
+            "Absolute_AUC": abs(res_test_auroc - 0.5),
+            "F1": res_test_f1,
+            "Sen": res_test_sens,
+            "Spec": res_test_spec,
+        }
+
+    sorted_nested_dict = dict(sorted(NewDict.items(), key=lambda x: (x[1]["Absolute_AUC"]), reverse= True))
+
+    for p in sorted_nested_dict.keys():
+        print("AUC for ", sorted_nested_dict[p]["Name"], "        AUC", sorted_nested_dict[p]["AUC"])
+
+    return sorted_nested_dict
+
+
+# Bar plot of the top_n classes from perClassAUC
+def plotTopAUC(sorted_nested_dict, top_n = 15, outputPath = None):
+    x_labels0 = []
+    y_labels0 = []
+    for x in list(sorted_nested_dict.keys())[:top_n]:
+        x_labels0.append(sorted_nested_dict[x]["Name"])
+        y_labels0.append(sorted_nested_dict[x]["AUC"].item())
+
+    # Numerical positions prevent repeated labels from overlapping
+    x_positions = range(len(x_labels0))
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    ax.bar(x_positions, y_labels0, color="steelblue", edgecolor="black", width=0.7)
+
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Score")
+    ax.set_xlabel("ECG Label")
+    ax.set_title("Model Scores by ECG Label For CMD Positive")
+
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(x_labels0, rotation=45, ha="right", rotation_mode="anchor")
+
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+
+    if outputPath:
+        plt.savefig(outputPath)
+    plt.show()
+
+
 
 
 if __name__ == "__main__":
-    """
+    r"""
     device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
     print(device)
 
@@ -291,28 +352,13 @@ if __name__ == "__main__":
         #x[5]
         #binary.append(x[5])
         binary.append(sum(x))
-    
-    
-    def turnTo150Output(classs , position = 0 ):
-        t = np.zeros([150]).astype(int)
-        t = list(t)
-        if classs == 1:
-            t[position] = 1
-            return t
-        else:
-            #t[2] = 1
-            return t
 
     newArray = []
     for x in binary:
-        forZero = newArray.append(turnTo150Output(x,47))
-
+        newArray.append(turnTo150Output(x,47))
 
     newArray = np.array(newArray)
-    type(newArray)
     newDT = pd.DataFrame(newArray)
-
-    newDT
 
     TaskNumberID = 47
     tsne_results = run_tsne(all_embeddings, all_embeddings.shape[0])
@@ -320,8 +366,6 @@ if __name__ == "__main__":
     out_path = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"StressTrialScienceDBNembedding_tsne.png")
     res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, newArray, all_pred_prob,'./tasks.txt', newDT)
 
-    res_test_auroc
-    
     TaskName = "ANOCA"
     save_individual_plot(tsne_results, label_two, out_path, TaskName)
     out_path_prauc = os.path.join(r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\Images", f"Check30TrialScienceDBPRAuc_CurveNORMAL ECG.png")
@@ -332,166 +376,7 @@ if __name__ == "__main__":
     #plotSaveROCAUC(afib_gt, afib_pred_prob,out_path_auc)
     plt.close()
 
+    # AUC of each of the 150 classes against ANOCA/CMD
+    sorted_nested_dict = perClassAUC(binary, all_pred_prob, './tasks.txt')
+    plotTopAUC(sorted_nested_dict, top_n = 15)
 
-
-    # Here we will plot the auc over the 150 classes
-    # the code will do the for every 150 class
-        # create a custome scienceDb csv
-        # using that csv, and the tasknumber, do 
-
-
-#binary
-
-tasks = []
-with open(os.path.join('./tasks.txt'), 'r') as fin: 
-        for line in fin:
-            tasks.append(line.strip())
-    #csv_filepath
-
-NewDict = {}
-for x in range(len(tasks)):
-    NewDict[x] = {"Name" : tasks[x]}
-
-
-aucList = []
-for y in NewDict.keys():
-    newArray = []
-    checkCount = 0
-    for x in binary:
-        newArray.append(turnTo150Output(x,y))
-
-
-    newArray = np.array(newArray)
-    newDT = pd.DataFrame(newArray)
-
-    
-    #(abs(((sorted_nested_dict[x]['AUC']) - 0.5)))
-    TaskNumberID = y
-    res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, TaskName = extractResults(TaskNumberID, newArray, all_pred_prob,'./tasks.txt', newDT)
-    NewDict[y]["AUC"] = res_test_auroc
-    NewDict[y]["Absolute_AUC"] = (abs(((NewDict[y]['AUC']) - 0.5)))
-    NewDict[y]["Name"] = TaskName
-    NewDict[y]["F1"] = res_test_f1
-    NewDict[y]["Sen"] = res_test_sens
-    NewDict[y]["Spec"] = res_test_spec
-    aucList.append(res_test_auroc)
-
-aucList.sort()
-
-aucList
-
-see = pd.DataFrame(NewDict)
-
-"This is AUC for  NONSPECIFIC T WAVE ABNORMALITY HAS REPLACED INVERTED T WAVES IN  And the AUC is  [0.67665232]"
-
-"This is AUC for  NONSPECIFIC T WAVE ABNORMALITY  And the AUC is  [0.66738244]"
-
-"This is AUC for  NONSPECIFIC T WAVE ABNORMALITY NO LONGER EVIDENT IN  And the AUC is  [0.63558922]"
-
-"This is AUC for  T WAVE INVERSION NO LONGER EVIDENT IN  And the AUC is  [0.61956058]"
-
-"This is AUC for  INVERTED T WAVES HAVE REPLACED NONSPECIFIC T WAVE ABNORMALITY IN  And the AUC is  [0.60657298]"
-
-from operator import itemgetter
-
-# Sort by value using itemgetter
-#sorted_dict = dict(sorted(data.items(), key=itemgetter(1)))
-
-#sorted_dict = dict(sorted(NewDict.items(), key=itemgetter(1)))
-#print(sorted_dict)
-
-sorted_nested_dict = dict(sorted(NewDict.items(), key=lambda x: (x[1]["Absolute_AUC"]),reverse= True))
-
-
-for x in sorted_nested_dict.keys():
-    print(abs(((sorted_nested_dict[x]['AUC']) - 0.5)))
-
-for p in sorted_nested_dict.keys():
-    print("AFIB For ", NewDict[p]["Name"], "        AUC", NewDict[p]["AUC"])
-
-
-
-counter = 0
-
-x_labels0 = []
-y_labels0 = []
-for x in sorted_nested_dict.keys():
-
-    if counter >= 15:
-        break
-    counter += 1
-    print(sorted_nested_dict[x]["Name"])
-    print(sorted_nested_dict[x]["AUC"].item())
-    x_labels0.append(sorted_nested_dict[x]["Name"])
-    y_labels0.append(sorted_nested_dict[x]["AUC"].item())
-
-x_labels0
-
-y_labels0
-#======================
-
-#logitAnoca+)=β0​+β1​(signed T-peak/QRS)+β2​(absolute T-area/QRS-area)+β3​(age)+β4​(heart rate)
-
-
-# Plot the above 
-import matplotlib.pyplot as plt
-
-x_labels = [
-    "RBBB AND LEFT POSTERIOR FASCICULAR BLOCK",
-    "NORMAL SINUS RHYTHM",
-    "ATRIAL FIBRILLATION",
-    "PREMATURE VENTRICULAR COMPLEXES",
-    "LEFT BUNDLE BRANCH BLOCK",
-    "RBBB AND LEFT POSTERIOR FASCICULAR BLOCK",
-    "NORMAL SINUS RHYTHM",
-    "ATRIAL FIBRILLATION",
-    "PREMATURE VENTRICULAR COMPLEXES",
-    "RBBB AND LEFT POSTERIOR FASCICULAR BLOCK",
-]
-
-y_values = [
-    0.82, 0.65, 0.91, 0.48, 0.74,
-    0.82, 0.65, 0.91, 0.48, 0.48
-]
-
-# Confirm that each label has one value
-assert len(x_labels0) == len(y_labels0), (
-    "x_labels and y_values must have the same length"
-)
-
-# Numerical positions prevent repeated labels from overlapping
-x_positions = range(len(x_labels0))
-
-fig, ax = plt.subplots(figsize=(14, 7))
-
-ax.bar(
-    x_positions,
-    y_labels0,
-    color="steelblue",
-    edgecolor="black",
-    width=0.7
-)
-
-ax.set_ylim(0, 1)
-ax.set_ylabel("Score")
-ax.set_xlabel("ECG Label")
-ax.set_title("Model Scores by ECG Label For CMD Positive")
-
-ax.set_xticks(x_positions)
-ax.set_xticklabels(
-    x_labels0,
-    rotation=45,
-    ha="right",
-    rotation_mode="anchor"
-)
-
-ax.grid(
-    axis="y",
-    linestyle="--",
-    alpha=0.4
-)
-
-ax.set_axisbelow(True)
-fig.tight_layout()
-
-plt.show()
