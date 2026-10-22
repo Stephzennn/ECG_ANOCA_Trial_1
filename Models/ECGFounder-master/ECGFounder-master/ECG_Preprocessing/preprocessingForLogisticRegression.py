@@ -306,8 +306,8 @@ signals, waves = nk.ecg_delineate(
     cleaned,
     rpeaks=rpeak_info["ECG_R_Peaks"],
     sampling_rate=500,
-    #method="prominence"
-    method = "dwt"
+    method="prominence"
+    #method = "dwt"
 )
 
 

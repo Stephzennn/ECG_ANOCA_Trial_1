@@ -15,3 +15,9 @@ ptb-xl/
 /*.zip
 /*.pptx
 /Image Collection/
+
+/Models/ECGFounder-master/ECGFounder-master/ECG_Preprocessing/qtdb_data/
+/Models/ECGFounder-master/ECGFounder-master/ECG_Preprocessing/qtdb_outputs/
+
+/Models/ECGFounder-master/ECGFounder-master/ECG_Preprocessing/ludb_data/
+/Models/ECGFounder-master/ECGFounder-master/ECG_Preprocessing/ludb_data/
