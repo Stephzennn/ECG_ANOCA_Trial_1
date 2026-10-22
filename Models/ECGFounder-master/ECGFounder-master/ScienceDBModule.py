@@ -37,18 +37,18 @@ duration = 10
 
 # Here we must create a label csv
 
-folder_path = Path("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data")
+# Paths relative to this file, so it runs the same on Windows and on the cluster
+base_path = Path(__file__).resolve().parent
+folder_path = base_path / "data" / "ScienceDB_Data"
 
-#Here we cut each patients ECG data into slices of 10 seconds. This is for the Rest data. 
+#Here we cut each patients ECG data into slices of 10 seconds, for each of the 3 phases.
 
-#Inputs for the baseline
-wordss = ["baseline","data", "rest", "500hz" ] 
-target_dir_name = "records500"
-
-# Inputs for the stress ecg
-
-wordsStress = ["experimental", "stress", "500hz", "data"]
-target_dir_nameStress = "records500_Stress"
+# phase: (words that must be in the csv file name, folder the 10 second slices go into)
+phases = {
+    "rest":     (["baseline", "data", "rest", "500hz"],        "records500"),
+    "stress":   (["experimental", "data", "stress", "500hz"],  "records500_Stress"),
+    "recovery": (["experimental", "data", "recover", "500hz"], "records500_Recover"),
+}
 
 def segmentAndFileEcg(wordss, target_dir_name, folder_path ):
     for file_path in folder_path.iterdir():
@@ -92,11 +92,8 @@ def segmentAndFileEcg(wordss, target_dir_name, folder_path ):
 
 
 
-# Inputs for the stress ecg
-
-wordsStress = ["experimental", "stress", "500hz", "data"]
-target_dir_nameStress = "records500_Stress"
-segmentAndFileEcg(wordss, target_dir_name, folder_path)
+for phase, (words, target_dir_name) in phases.items():
+    segmentAndFileEcg(words, target_dir_name, folder_path)
 
 
 def turnTo150Output(classs , position = 0 ):
@@ -112,43 +109,42 @@ def turnTo150Output(classs , position = 0 ):
 
 temListmeta = []
 
-for file_path in folder_path.iterdir():
+for file_path in sorted(folder_path.iterdir()):
     if file_path.name[0:3] == "sub":
         patientID = int(file_path.name[4:])
-        words = ['disease' , 'json']
-        for recordName in (file_path / target_dir_name).iterdir():
-            relativePath = (recordName.relative_to("C:/Users/Estif/Downloads/Langone/ANOCA/ECG_ANOCA_Trial_1/Models/ECGFounder-master/ECGFounder-master/data/ScienceDB_Data"))
-            relativePath =  relativePath.with_suffix("").as_posix()
-            tempList = []
-            tempList.append(patientID)
-            tempList.append("/" + relativePath)
-            for csvFile in file_path.iterdir():
-                        contains_word = all(
-                                word.lower() in (csvFile.name).lower()
-                                        for word in words
-                                    )
-                        if contains_word == True:
-                            with open(csvFile, "r") as file:
-                                disease_data = json.load(file)
-                            #output150 = turnTo150Output(disease_data['ANOCA'], 0)
-                            output150 = turnTo150Output(disease_data['CMD'], 0)
-                            #tempList.append(disease_data['ANOCA']) #CMD
-                            tempList.append(disease_data['CMD'])
-                            tempList.append(str(output150))
-                            temListmeta.append(tempList)
+
+        # this person's disease json (same for every slice and every phase)
+        jsonFile = next(file_path.glob("*disease*.json"))
+        with open(jsonFile, "r") as file:
+            disease_data = json.load(file)
+        #output150 = turnTo150Output(disease_data['ANOCA'], 0)
+        output150 = turnTo150Output(disease_data['CMD'], 0)
+
+        for phase, (words, target_dir_name) in phases.items():
+            # one .hea per record (iterdir() also listed the .dat, so every record was written twice)
+            for recordName in sorted((file_path / target_dir_name).glob("*.hea")):
+                relativePath = recordName.relative_to(folder_path).with_suffix("").as_posix()
+                tempList = []
+                tempList.append(patientID)
+                tempList.append("/" + relativePath)
+                tempList.append(disease_data['CMD'])
+                tempList.append(str(output150))
+                tempList.append(disease_data['ANOCA'])
+                tempList.append(disease_data['CMD'])
+                tempList.append(phase)
+                temListmeta.append(tempList)
 
 
-dfTemp = pd.DataFrame(temListmeta, columns=['patient_id', 'filename_hr','BinaryLabel', 'label',  ])
+# BinaryLabel and label are unchanged (still CMD) so the datasets work as before.
+# ANOCA and CMD are kept as separate columns for the per-person analysis.
+# phase is rest, stress or recovery.
+dfTemp = pd.DataFrame(temListmeta, columns=['patient_id', 'filename_hr','BinaryLabel', 'label', 'ANOCA', 'CMD', 'phase' ])
 
-dfTemp
-#output_path_pickle = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label.pkl"
 
-
-# Save the label csv
-
-output_path = r"C:\Users\Estif\Downloads\Langone\ANOCA\ECG_ANOCA_Trial_1\Models\ECGFounder-master\ECGFounder-master\csv\ScienceDB_label.csv"
-
-dfTemp.to_csv(output_path, index=False)
+# Save the label csvs: all 3 phases together, plus the old rest only and stress only files
+dfTemp.to_csv(base_path / "csv" / "ScienceDB_label_all_phases.csv", index=False)
+dfTemp[dfTemp["phase"] == "rest"].to_csv(base_path / "csv" / "ScienceDB_label.csv", index=False)
+dfTemp[dfTemp["phase"] == "stress"].to_csv(base_path / "csv" / "ScienceDB_label_stress.csv", index=False)
 
 
 """

@@ -80,6 +80,7 @@ def generateOutput(testloader, model, device):
             all_gt.append(input_y.cpu().data.numpy())
             all_embeddings.append(deep_features.cpu().data.numpy())
     all_pred_prob = np.concatenate(all_pred_prob)
+    all_logits = np.concatenate(all_logits)
     all_gt = np.concatenate(all_gt)
     all_embeddings = np.concatenate(all_embeddings)
     labels = np.concatenate(all_gt)
@@ -111,7 +112,42 @@ def extractResults(task: int, all_gt, all_pred_prob, taskPath ,df_gt):
     label_two = (df_gt[task].values == 1).astype(int)
 
     return res_test, res_test_auroc, res_test_sens, res_test_spec, res_test_f1, optimal_thresholds, label_two, afib_gt, afib_pred_prob, dd
-    
+
+
+# Names of the 150 classes. Line i of tasks.txt is logit i (counting from 0).
+def loadTaskNames(taskPath = './tasks.txt'):
+    with open(taskPath, 'r') as fin:
+        return [line.strip() for line in fin if line.strip()]
+
+
+# Average the 150 logits over all ECGs of the same person -> one row per person
+# (one row per person and phase if the csv has a phase column: rest, stress, recovery).
+# Works for any number of ECGs per person (groupby averages whatever rows each person has).
+def averageLogitsPerPerson(testset, all_logits, taskPath = './tasks.txt', groupColumns = ("patient_id", "phase"), labelColumns = ("ANOCA", "CMD", "BinaryLabel")):
+
+    # Step 1: the table the dataset used (same rows, same order as all_logits, since shuffle=False)
+    table = testset.data.reset_index(drop=True)
+
+    # only keep the columns this csv actually has (older csvs have no phase, ANOCA or CMD)
+    groupColumns = [c for c in groupColumns if c in table.columns]
+    labelColumns = [c for c in labelColumns if c in table.columns]
+
+    # Step 2: put the 150 logits next to each row, named after the classes in tasks.txt
+    logitTable = pd.DataFrame(all_logits, columns = loadTaskNames(taskPath))
+    logitTable[groupColumns] = table[groupColumns]
+    logitTable["filename_hr"] = table["filename_hr"]
+    logitTable[labelColumns] = table[labelColumns]
+
+    # Step 3: if a filename is listed more than once, keep only one copy
+    logitTable = logitTable.drop_duplicates(subset="filename_hr").drop(columns="filename_hr")
+
+    # Step 4: one row per person (and phase)
+    personTable = logitTable.groupby(groupColumns).mean()
+    personTable["n_ECGs"] = logitTable.groupby(groupColumns).size()
+    personTable[labelColumns] = logitTable.groupby(groupColumns)[labelColumns].first()
+
+    return personTable
+
 
 
 # For every output, extract PCA components of 50. and save it in a new file.
