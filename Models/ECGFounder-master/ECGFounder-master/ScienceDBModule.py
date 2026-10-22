@@ -70,6 +70,9 @@ def segmentAndFileEcg(wordss, target_dir_name, folder_path ):
                     ).to_numpy().T
                     count = 0
                     nameCount = 0
+                    if ecg_signal.shape[1] != 12:
+                        print(f"SKIP {csvFile.name}: {ecg_signal.shape[1]} leads, expected 12")
+                        continue
                     while True:
                         if count > ecg_signal.shape[0]:
                             break
