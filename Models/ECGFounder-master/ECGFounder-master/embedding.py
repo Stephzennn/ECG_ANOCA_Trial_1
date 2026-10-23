@@ -123,7 +123,8 @@ def loadTaskNames(taskPath = './tasks.txt'):
 # Average the 150 logits over all ECGs of the same person -> one row per person
 # (one row per person and phase if the csv has a phase column: rest, stress, recovery).
 # Works for any number of ECGs per person (groupby averages whatever rows each person has).
-def averageLogitsPerPerson(testset, all_logits, taskPath = './tasks.txt', groupColumns = ("patient_id", "phase"), labelColumns = ("ANOCA", "CMD", "BinaryLabel")):
+# columnNames: names of the columns of all_logits (default: the 150 class names), e.g. emb_0 ... emb_1023 for the embeddings.
+def averageLogitsPerPerson(testset, all_logits, taskPath = './tasks.txt', groupColumns = ("patient_id", "phase"), labelColumns = ("ANOCA", "CMD", "BinaryLabel"), columnNames = None):
 
     # Step 1: the table the dataset used (same rows, same order as all_logits, since shuffle=False)
     table = testset.data.reset_index(drop=True)
@@ -133,7 +134,9 @@ def averageLogitsPerPerson(testset, all_logits, taskPath = './tasks.txt', groupC
     labelColumns = [c for c in labelColumns if c in table.columns]
 
     # Step 2: put the 150 logits next to each row, named after the classes in tasks.txt
-    logitTable = pd.DataFrame(all_logits, columns = loadTaskNames(taskPath))
+    if columnNames is None:
+        columnNames = loadTaskNames(taskPath)
+    logitTable = pd.DataFrame(all_logits, columns = columnNames)
     logitTable[groupColumns] = table[groupColumns]
     logitTable["filename_hr"] = table["filename_hr"]
     logitTable[labelColumns] = table[labelColumns]

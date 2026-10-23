@@ -3,14 +3,22 @@ import pandas as pd
 import torch
 from pathlib import Path
 from net1d import Net1D
+from joblib import Parallel, delayed
+from sklearn.base import clone
+from sklearn.calibration import calibration_curve
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegressionCV
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedKFold, cross_val_score, permutation_test_score
+from sklearn.metrics import roc_auc_score, roc_curve, average_precision_score, brier_score_loss, confusion_matrix
+from sklearn.model_selection import (GridSearchCV, RepeatedStratifiedKFold, StratifiedKFold, cross_val_predict,
+                                     cross_val_score, permutation_test_score)
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import xgboost as xgb
+from xgboost import XGBClassifier
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
-from scipy.stats import chi2
+from scipy.stats import chi2, spearmanr
 from matplotlib import pyplot as plt
 
 from embedding import createDataloader, loadWeightsToModel, generateOutput, averageLogitsPerPerson, loadTaskNames
@@ -25,6 +33,16 @@ ecg_filepath = str(base_path / "data" / "ScienceDB_Data")
 
 # The per person (and phase) 150 logits are saved here, so the model only runs once
 personLogitsPath = base_path / "csv" / "ScienceDB_person_logits.csv"
+
+# Same for the 1024 embeddings (deep_features, the layer before the 150 logits), averaged per person and phase
+personEmbeddingsPath = base_path / "csv" / "ScienceDB_person_embeddings.csv"
+embeddingColumns = [f"emb_{i}" for i in range(1024)]
+
+# Which part of the __main__ code to run:
+#   runInference:  steps 1-4, which logits are associated with ANOCA (bivariate, multivariable, CV AUC, permutation)
+#   runPrediction: the prediction report at the end of the file, 150 logits vs 1024 embeddings
+runInference = False
+runPrediction = True
 
 
 # Pre-specified ECG biomarker classes (fewer tests -> lighter FDR correction).
@@ -61,13 +79,9 @@ biomarkerClasses = [
 ]
 
 
-# Run ECGFounder on every 10 second slice, then average the 150 logits per person and phase.
-# If this was already done, just read the saved csv.
-def getPersonLogits(rerun = False):
-    if personLogitsPath.exists() and rerun == False:
-        print(f"Reading saved person logits from {personLogitsPath}")
-        return pd.read_csv(personLogitsPath, index_col = ["patient_id", "phase"])
-
+# Run ECGFounder on every 10 second slice. Returns the dataset (patient and phase of every slice),
+# and the 150 logits and 1024 embeddings of every slice, in the same row order.
+def runECGFounder():
     device = torch.device('cuda:{}'.format(0) if torch.cuda.is_available() else 'cpu')
     # 8 workers load and resample the slices in parallel (num_workers=0 made the GPU wait on loading)
     testset, testloader = createDataloader(taskPath, 512, ecg_filepath, csv_filepath, num_workers = 8, ScienceDB=True)
@@ -88,10 +102,32 @@ def getPersonLogits(rerun = False):
     model.to(device)
     log = loadWeightsToModel(checkpointPath, model, device)
     all_gt, all_embeddings, df_gt, labels, all_pred_prob , all_logits = generateOutput(testloader, model, device)
+    return testset, all_logits, all_embeddings
 
+
+# Average the 150 logits per person and phase. If this was already done, just read the saved csv.
+def getPersonLogits(rerun = False):
+    if personLogitsPath.exists() and rerun == False:
+        print(f"Reading saved person logits from {personLogitsPath}")
+        return pd.read_csv(personLogitsPath, index_col = ["patient_id", "phase"])
+
+    testset, all_logits, all_embeddings = runECGFounder()
     personTable = averageLogitsPerPerson(testset, all_logits, taskPath)
     personTable.to_csv(personLogitsPath)
     print(f"Saved person logits to {personLogitsPath}")
+    return personTable
+
+
+# Same for the 1024 embeddings (needs one more ECGFounder run the first time, a GPU makes it much faster).
+def getPersonEmbeddings(rerun = False):
+    if personEmbeddingsPath.exists() and rerun == False:
+        print(f"Reading saved person embeddings from {personEmbeddingsPath}")
+        return pd.read_csv(personEmbeddingsPath, index_col = ["patient_id", "phase"])
+
+    testset, all_logits, all_embeddings = runECGFounder()
+    personTable = averageLogitsPerPerson(testset, all_embeddings, columnNames = embeddingColumns)
+    personTable.to_csv(personEmbeddingsPath)
+    print(f"Saved person embeddings to {personEmbeddingsPath}")
     return personTable
 
 
@@ -113,25 +149,52 @@ def logisticModel():
         LogisticRegressionCV(Cs = 10, cv = 5, penalty = "l2", scoring = "roc_auc", max_iter = 5000))
 
 
+# Nonlinear checks on the same logits: can curved effects or interactions between logits beat the linear model?
+# Random forest: no scaling needed. min_samples_leaf = 3 keeps trees from memorising single people (n ~ 97).
+def randomForestModel(seed = 0):
+    return RandomForestClassifier(n_estimators = 500, max_features = "sqrt", min_samples_leaf = 3, random_state = seed)
+
+
+# RBF kernel SVM: C picked inside each training fold (like the logistic penalty), gamma = 1 / (n_features * var(X)).
+def svmModel():
+    return make_pipeline(
+        StandardScaler(),
+        GridSearchCV(SVC(kernel = "rbf", gamma = "scale"), {"C": [0.01, 0.1, 1, 10, 100]}, cv = 5, scoring = "roc_auc"))
+
+
+# Gradient boosted trees: each new tree fixes the errors of the ones before. Kept small for n ~ 97:
+# depth 2 trees (at most pairwise interactions), slow learning rate, row / column subsampling, L2 on leaf weights.
+# Fixed settings, not tuned, so nothing in the test fold helps choose them. n_jobs = 1: the folds already run in parallel.
+def xgboostModel(seed = 0):
+    return XGBClassifier(
+        n_estimators = 200, max_depth = 2, learning_rate = 0.05, subsample = 0.8, colsample_bytree = 0.5,
+        min_child_weight = 3, reg_lambda = 1.0, eval_metric = "logloss", n_jobs = 1, random_state = seed)
+
+
 # Same seed -> same folds for every call, so the AUCs of two models can be compared fold by fold.
-def cvLogisticAUC(table, label = "ANOCA", tasks = None, n_splits = 5, n_repeats = 10, seed = 0):
+# model: logisticModel() by default, or randomForestModel() / svmModel() / xgboostModel().
+def cvLogisticAUC(table, label = "ANOCA", tasks = None, n_splits = 5, n_repeats = 10, seed = 0, model = None):
     if tasks is None:
         tasks = loadTaskNames(taskPath)
     X = table[tasks].to_numpy()
     y = table[label].to_numpy()
     cv = RepeatedStratifiedKFold(n_splits = n_splits, n_repeats = n_repeats, random_state = seed)
-    return cross_val_score(logisticModel(), X, y, cv = cv, scoring = "roc_auc", n_jobs = -1)
+    if model is None:
+        model = logisticModel()
+    return cross_val_score(model, X, y, cv = cv, scoring = "roc_auc", n_jobs = -1)
 
 
 # Is the cross validated AUC better than chance? Shuffle the labels and refit n_permutations times.
-def permutationPValue(table, label = "ANOCA", tasks = None, n_permutations = 200, seed = 0):
+def permutationPValue(table, label = "ANOCA", tasks = None, n_permutations = 200, seed = 0, model = None):
     if tasks is None:
         tasks = loadTaskNames(taskPath)
     X = table[tasks].to_numpy()
     y = table[label].to_numpy()
     cv = StratifiedKFold(n_splits = 5, shuffle = True, random_state = seed)
+    if model is None:
+        model = logisticModel()
     score, permScores, pValue = permutation_test_score(
-        logisticModel(), X, y, cv = cv, scoring = "roc_auc", n_permutations = n_permutations, n_jobs = -1, random_state = seed)
+        model, X, y, cv = cv, scoring = "roc_auc", n_permutations = n_permutations, n_jobs = -1, random_state = seed)
     return score, permScores, pValue
 
 
@@ -230,7 +293,7 @@ def showBivariateTable(results, top_n = 20, title = "", outputPath = None):
     return show
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and runInference:
 
     personTable = getPersonLogits()
 
@@ -240,7 +303,7 @@ if __name__ == "__main__":
     print(personTable[["n_ECGs", "ANOCA", "CMD"]].head())
 
     # one phase at a time: "rest", "stress" or "recovery" (titles and file names follow this)
-    phase = "recovery"
+    phase = "stress"
     phaseTable = personTable.xs(phase, level = "phase")
 
     label = "ANOCA"
@@ -304,6 +367,21 @@ if __name__ == "__main__":
     score, permScores, pValue = permutationPValue(phaseTable, label)
     print(f"Permutation test: AUC = {score:.3f}, chance AUC = {permScores.mean():.3f}, p = {pValue:.3f}")
 
+    # 3b) nonlinear models on all 150 logits, same 50 folds and same permutation test.
+    # If they don't beat the logistic AUC, the linear readout is enough.
+    for name, makeModel in [("Random forest", randomForestModel), ("RBF SVM", svmModel), ("XGBoost", xgboostModel)]:
+        nonlinearAUCs = cvLogisticAUC(phaseTable, label, model = makeModel())
+        print(f"\n{name}, all 150 logits: CV AUC = {nonlinearAUCs.mean():.3f} "
+              f"(SD {nonlinearAUCs.std():.3f}, {len(nonlinearAUCs)} folds)")
+
+        score, permScores, pValue = permutationPValue(phaseTable, label, model = makeModel())
+        print(f"Permutation test: AUC = {score:.3f}, chance AUC = {permScores.mean():.3f}, p = {pValue:.3f}")
+
+        # fold by fold comparison (same 50 folds as the logistic model)
+        difference = nonlinearAUCs - foldAUCs
+        print(f"{name} minus logistic: mean AUC difference = {difference.mean():+.3f}, "
+              f"{name} better in {(difference > 0).sum()} of {len(difference)} folds")
+
     # 4) same model, but only the pre-specified ECG biomarker logits.
     # If the AUC is close to the 150 logit model, the signal is in these T wave / conduction findings.
     biomarkerAUCs = cvLogisticAUC(phaseTable, label, tasks = biomarkerClasses)
@@ -319,6 +397,28 @@ if __name__ == "__main__":
           f"biomarker model as good or better in {(difference >= 0).sum()} of {len(difference)} folds")
 
 """
+Logistic regression, all 150 logits:
+
+                CV AUC, 50 folds    Permutation test (one 5 fold split, 200 shuffles)
+                                    AUC     chance AUC   p
+    Rest        0.643 (SD 0.104)    0.655   0.502        0.030
+    Stress      0.685 (SD 0.103)    0.675   0.497        0.020
+    Recovery    0.659 (SD 0.119)    0.717   0.494        0.015
+
+    Report the 50 fold CV AUC; the permutation AUC is from a single split, so it differs by about ±0.05.
+    Use the permutation test only for its p value.
+
+Nonlinear check, stress, all 150 logits (same 50 folds and permutation test as the logistic model):
+
+                    CV AUC, 50 folds    Permutation p   vs logistic (mean diff, folds better)
+    Logistic        0.685 (SD 0.103)    0.020
+    Random forest   0.666 (SD 0.097)    0.030           -0.020, 22 of 50
+    RBF SVM         0.666 (SD 0.113)    0.030           -0.019, 21 of 50
+    XGBoost         0.690 (SD 0.100)    0.030           +0.004, 28 of 50
+
+    No nonlinear model clearly beat the logistic regression (XGBoost +0.004 is far inside the fold SD of ~0.10),
+    so a linear readout of the logits is enough.
+
 In recovery ECGs from women with chest pain, a model using 11 pre-specified ECGFounder ECG-biomarker outputs 
 discriminated ANOCA+ from ANOCA− with a cross-validated AUC of 0.66 (permutation p = 0.03), matching the full
 150-output model. The strongest contributors were nonspecific T-wave abnormality (higher in ANOCA+) and 
@@ -369,15 +469,16 @@ All 14 biomarkers, each adjusted for the other 13:
         OR      = odds ratio of ANOCA per 1 SD higher logit (> 1: higher logit goes with ANOCA+, < 1: with ANOCA-)
         95% CI  = 95% confidence interval of the OR (if it does not include 1, p < 0.05)
         p       = Wald p value for that biomarker
+        *       = p < 0.05
 
     Biomarker                                          Rest                    Stress                  Recovery
                                                        OR (95% CI)      p      OR (95% CI)      p      OR (95% CI)      p
-    NONSPECIFIC T WAVE ABNORMALITY                   2.37 (0.86-6.52) 0.096  1.16 (0.51-2.63) 0.732  2.02 (0.83-4.94) 0.122
+    NONSPECIFIC T WAVE ABNORMALITY                     2.37 (0.86-6.52) 0.096  1.16 (0.51-2.63) 0.732  2.02 (0.83-4.94) 0.122
     WITH REPOLARIZATION ABNORMALITY                    0.81 (0.26-2.49) 0.715  0.71 (0.23-2.17) 0.549  0.84 (0.31-2.23) 0.721
     NONSPECIFIC ST ABNORMALITY                         0.84 (0.44-1.59) 0.583  1.41 (0.71-2.79) 0.331  1.74 (0.88-3.43) 0.111
-    EARLY REPOLARIZATION                               0.59 (0.27-1.27) 0.179  0.44 (0.20-0.98) 0.043  0.84 (0.39-1.78) 0.645
+    EARLY REPOLARIZATION                               0.59 (0.27-1.27) 0.179  0.44 (0.20-0.98) 0.043* 0.84 (0.39-1.78) 0.645
     PROLONGED QT                                       0.68 (0.36-1.29) 0.238  0.65 (0.32-1.33) 0.238  0.74 (0.38-1.48) 0.397
-    NONSPECIFIC INTRAVENTRICULAR CONDUCTION DELAY      0.63 (0.35-1.11) 0.109  0.59 (0.31-1.11) 0.104  0.51 (0.26-0.98) 0.044
+    NONSPECIFIC INTRAVENTRICULAR CONDUCTION DELAY      0.63 (0.35-1.11) 0.109  0.59 (0.31-1.11) 0.104  0.51 (0.26-0.98) 0.044*
     RSR' PATTERN IN V1                                 1.02 (0.56-1.87) 0.945  0.86 (0.48-1.57) 0.625  1.08 (0.60-1.94) 0.801
     LOW VOLTAGE QRS                                    1.17 (0.65-2.14) 0.602  0.99 (0.53-1.85) 0.964  1.10 (0.59-2.05) 0.760
     VOLTAGE CRITERIA FOR LEFT VENTRICULAR HYPERTROPHY  1.48 (0.50-4.40) 0.484  1.90 (0.64-5.62) 0.246  1.48 (0.55-3.95) 0.436
@@ -425,4 +526,281 @@ The 14 biomarkers:
 ECGFounder output logits are correlated by design (150 classes, about 19 effective dimensions); we reduced
 this to 14 clinically distinct biomarkers (maximum |r| = 0.73, VIF <= 5.4).
 
+"""
+
+
+# ---------------------------------------------------------------------------
+# Prediction: how well can ANOCA be predicted for people the model has not seen? (see NEXT_STEPS.md)
+# Same model (logisticModel(), ridge with the penalty tuned inside each training fold) and the same 50 folds
+# as above, on the 150 logits and on the 1024 embeddings. The result is the out of fold performance, per person.
+# ---------------------------------------------------------------------------
+
+# One fold: fit on the training people, predict the test people.
+# The threshold is the Youden index (max sensitivity + specificity - 1) of an inner 5 fold CV on the training people
+# only, so the test fold never helps choose it (0.5 is not a sensible default with 65% ANOCA+).
+def predictFold(model, X, y, train, test, seed = 0):
+    inner = StratifiedKFold(n_splits = 5, shuffle = True, random_state = seed)
+    innerProb = cross_val_predict(clone(model), X[train], y[train], cv = inner, method = "predict_proba")[:, 1]
+    fpr, tpr, thresholds = roc_curve(y[train], innerProb)
+    threshold = thresholds[np.argmax(tpr - fpr)]
+
+    foldModel = clone(model).fit(X[train], y[train])
+    prob = foldModel.predict_proba(X[test])[:, 1]
+    return test, prob, prob >= threshold
+
+
+# Out of fold predicted probability (and yes / no call) of every person, once per repeat.
+# Same seed -> same folds as cvLogisticAUC, so the two inputs are tested on exactly the same people.
+# Returns y, prob and predicted, the last two of shape (n_repeats, n_people).
+def outOfFoldPredictions(table, label = "ANOCA", tasks = None, n_splits = 5, n_repeats = 10, seed = 0, model = None):
+    if tasks is None:
+        tasks = loadTaskNames(taskPath)
+    if model is None:
+        model = logisticModel()
+    X = table[tasks].to_numpy()
+    y = table[label].to_numpy()
+    cv = RepeatedStratifiedKFold(n_splits = n_splits, n_repeats = n_repeats, random_state = seed)
+    folds = Parallel(n_jobs = -1)(delayed(predictFold)(model, X, y, train, test, seed) for train, test in cv.split(X, y))
+
+    prob = np.full((n_repeats, len(y)), np.nan)
+    predicted = np.zeros((n_repeats, len(y)), dtype = bool)
+    for i, (test, foldProb, foldPredicted) in enumerate(folds):
+        prob[i // n_splits, test] = foldProb          # folds come in order: 5 per repeat
+        predicted[i // n_splits, test] = foldPredicted
+    return y, prob, predicted
+
+
+# Metrics of the out of fold predictions, once per repeat (each person predicted once per repeat),
+# and the 95% CI of the AUROC: bootstrap over people of the predicted probability averaged over the repeats.
+# AUPRC is compared with the ANOCA+ prevalence (its chance level), not with 0.5.
+# ANOCA+ is the majority (~65%), so AUPRC for ANOCA+ starts high by chance. AUPRC_negative treats ANOCA- (the minority,
+# ~35%) as the class to find, with 1 - p as its score: the harder and more informative direction here.
+def predictionMetrics(y, prob, predicted, n_bootstrap = 2000, seed = 0):
+    rows = []
+    for p, yhat in zip(prob, predicted):
+        tn, fp, fn, tp = confusion_matrix(y, yhat, labels = [0, 1]).ravel()
+        rows.append({
+            "AUROC": roc_auc_score(y, p),
+            "AUPRC": average_precision_score(y, p),
+            "AUPRC_negative": average_precision_score(1 - y, 1 - p),
+            "Brier": brier_score_loss(y, p),
+            "Sensitivity": tp / (tp + fn),
+            "Specificity": tn / (tn + fp),
+            "PPV": tp / (tp + fp) if tp + fp else np.nan,
+            "NPV": tn / (tn + fn) if tn + fn else np.nan,
+            "Balanced accuracy": (tp / (tp + fn) + tn / (tn + fp)) / 2,
+            "TP": tp, "FP": fp, "FN": fn, "TN": tn})
+    perRepeat = pd.DataFrame(rows)
+
+    meanProb = prob.mean(axis = 0)
+    rng = np.random.default_rng(seed)
+    bootAUCs = []
+    for _ in range(n_bootstrap):
+        sample = rng.integers(0, len(y), len(y))
+        if y[sample].min() != y[sample].max():      # needs both classes
+            bootAUCs.append(roc_auc_score(y[sample], meanProb[sample]))
+    aucCI = np.percentile(bootAUCs, [2.5, 97.5])
+    return perRepeat, meanProb, aucCI
+
+
+# ROC curve and calibration plot of the out of fold probabilities (averaged over the repeats), one line per input.
+def plotPrediction(y, meanProbs, labelName = "ANOCA", title = "", outputPath = None):
+    fig, (axROC, axCal) = plt.subplots(1, 2, figsize = (11, 5))
+    for name, meanProb in meanProbs.items():
+        fpr, tpr, _ = roc_curve(y, meanProb)
+        axROC.plot(fpr, tpr, lw = 1.8, label = f"{name} (AUROC {roc_auc_score(y, meanProb):.2f})")
+        # 5 bins of equal size: with ~97 people, more bins are mostly noise
+        fracPositive, meanPredicted = calibration_curve(y, meanProb, n_bins = 5, strategy = "quantile")
+        axCal.plot(meanPredicted, fracPositive, "o-", lw = 1.8, label = f"{name} (Brier {brier_score_loss(y, meanProb):.3f})")
+
+    axROC.plot([0, 1], [0, 1], "k--", lw = 1)
+    axROC.set_xlabel("1 - specificity")
+    axROC.set_ylabel("Sensitivity")
+    axROC.set_title("ROC, out of fold")
+    axROC.legend(loc = "lower right")
+    axCal.plot([0, 1], [0, 1], "k--", lw = 1)
+    axCal.set_xlabel(f"Predicted probability of {labelName}+")
+    axCal.set_ylabel(f"Observed fraction {labelName}+")
+    axCal.set_title("Calibration, out of fold (5 quantile bins)")
+    axCal.legend(loc = "upper left")
+    fig.suptitle(title)
+    fig.tight_layout()
+    if outputPath:
+        fig.savefig(outputPath, dpi = 200, bbox_inches = "tight")
+        print(f"Saved {outputPath}")
+    plt.show()
+
+
+# Which of the 150 classes does XGBoost use? One XGBoost model per fold (same 50 folds as above), and for the
+# test people of that fold the SHAP value of every class: how much that class moved this person's predicted
+# log odds of ANOCA+ away from the average (TreeSHAP, built into xgboost as pred_contribs, no shap package needed).
+# Computed on people the fold model did not see, so it describes what generalises, not what was memorised.
+#   mean |SHAP|: overall importance (log odds units), averaged over all people and repeats
+#   direction:   Spearman r between the class logit and its SHAP value, > 0: higher logit pushes towards ANOCA+
+#   gain:        xgboost's own importance (average loss reduction of the splits on that class), mean over the 50 models
+# Description of the model only, not inference: no p values, and correlated classes share (or steal) importance.
+def xgboostFold(X, y, train, test, seed = 0):
+    foldModel = xgboostModel(seed).fit(X[train], y[train])
+    booster = foldModel.get_booster()
+    contribs = booster.predict(xgb.DMatrix(X[test]), pred_contribs = True)[:, :-1]     # last column is the bias
+    gain = booster.get_score(importance_type = "gain")                                  # keys f0, f1, ...
+    return test, contribs, np.array([gain.get(f"f{j}", 0.0) for j in range(X.shape[1])])
+
+
+def xgboostImportance(table, label = "ANOCA", tasks = None, n_splits = 5, n_repeats = 10, seed = 0):
+    if tasks is None:
+        tasks = loadTaskNames(taskPath)
+    X = table[tasks].to_numpy()
+    y = table[label].to_numpy()
+    cv = RepeatedStratifiedKFold(n_splits = n_splits, n_repeats = n_repeats, random_state = seed)
+    folds = Parallel(n_jobs = -1)(delayed(xgboostFold)(X, y, train, test, seed) for train, test in cv.split(X, y))
+
+    # every person appears once per repeat, so these are n_repeats x n_people rows
+    shap = np.concatenate([contribs for test, contribs, gain in folds])
+    values = np.concatenate([X[test] for test, contribs, gain in folds])
+    result = pd.DataFrame({
+        "mean_abs_SHAP": np.abs(shap).mean(axis = 0),
+        "direction_r": [spearmanr(values[:, j], shap[:, j])[0] if shap[:, j].any() else np.nan for j in range(len(tasks))],
+        "gain": np.mean([gain for test, contribs, gain in folds], axis = 0),
+        "used_in_folds": np.mean([gain > 0 for test, contribs, gain in folds], axis = 0)}, index = tasks)
+    return result.sort_values("mean_abs_SHAP", ascending = False)
+
+
+# Kernel density of the out of fold predicted probability, ANOCA- vs ANOCA+ (like KernelDensityPlot.py).
+# The more the two curves are apart, the better the model separates the groups; the overlap is what the AUROC measures.
+# Ticks under the curves are the individual people.
+def plotPredictionDensity(y, prob, labelName = "ANOCA", title = "", outputPath = None):
+    probs = pd.Series(prob)
+    fig, ax = plt.subplots(figsize = (8, 5))
+    for value, color, name in [(0, "steelblue", f"{labelName}- (n={(y == 0).sum()})"), (1, "darkorange", f"{labelName}+ (n={(y == 1).sum()})")]:
+        probs[y == value].plot.kde(ax = ax, color = color, linewidth = 2.5, label = name)
+        ax.plot(probs[y == value], np.full((y == value).sum(), -0.05 - 0.1 * value), "|", color = color, markersize = 12)
+    ax.set_xlim(0, 1)
+    ax.set_xlabel(f"Out of fold predicted probability of {labelName}+")
+    ax.set_ylabel("Density")
+    ax.set_title(f"{title}\nAUROC {roc_auc_score(y, prob):.2f}")
+    ax.grid(True, linestyle = "--", alpha = 0.6)
+    ax.legend()
+    fig.tight_layout()
+    if outputPath:
+        fig.savefig(outputPath, dpi = 200, bbox_inches = "tight")
+        print(f"Saved {outputPath}")
+    plt.show()
+
+
+if __name__ == "__main__" and runPrediction:
+
+    phase = "stress"
+    label = "ANOCA"
+
+    logitTable = getPersonLogits().xs(phase, level = "phase")
+    embeddingTable = getPersonEmbeddings().xs(phase, level = "phase")
+
+    # same people in the same order, otherwise the folds would not match
+    assert logitTable.index.equals(embeddingTable.index)
+    assert (logitTable[label] == embeddingTable[label]).all()
+    print(f"\nPrediction, {phase}, {label}: {logitTable[label].sum()} positive, {(logitTable[label] == 0).sum()} negative")
+
+    # every input x model combination, all on the same 50 folds.
+    # Ridge logistic = linear probe; XGBoost = shallow trees, can use curved effects and pairwise interactions.
+    inputs = {"150 logits": (logitTable, loadTaskNames(taskPath)), "1024 embeddings": (embeddingTable, embeddingColumns)}
+    models = {"ridge": logisticModel, "XGBoost": xgboostModel}
+    meanProbs, foldAUCs = {}, {}
+    for inputName, (table, tasks) in inputs.items():
+        for modelName, makeModel in models.items():
+            name = f"{inputName}, {modelName}"
+            y, prob, predicted = outOfFoldPredictions(table, label, tasks, model = makeModel())
+            perRepeat, meanProbs[name], aucCI = predictionMetrics(y, prob, predicted)
+
+            print(f"\n{name}, out of fold over 10 repeats of 5 fold CV:")
+            print(f"    AUROC {perRepeat['AUROC'].mean():.3f} (95% CI {aucCI[0]:.2f}-{aucCI[1]:.2f}, bootstrap over people)")
+            print(f"    AUPRC {perRepeat['AUPRC'].mean():.3f} (chance = prevalence {y.mean():.2f})")
+            print(f"    AUPRC for {label}- {perRepeat['AUPRC_negative'].mean():.3f} (chance = prevalence {1 - y.mean():.2f})")
+            print(f"    Brier {perRepeat['Brier'].mean():.3f} (always predicting the prevalence: {y.mean() * (1 - y.mean()):.3f})")
+            print("    At the Youden threshold of each training fold (mean over repeats, min-max):")
+            for metric in ["Sensitivity", "Specificity", "PPV", "NPV", "Balanced accuracy"]:
+                print(f"        {metric:18s} {perRepeat[metric].mean():.2f} ({perRepeat[metric].min():.2f}-{perRepeat[metric].max():.2f})")
+            counts = perRepeat[["TP", "FP", "FN", "TN"]].mean()
+            print(f"    Confusion matrix (mean people per repeat): predicted ANOCA+: {counts.TP:.1f} true, {counts.FP:.1f} false; "
+                  f"predicted ANOCA-: {counts.TN:.1f} true, {counts.FN:.1f} false")
+
+            # fold AUCs (same 50 folds for every combination) and the permutation test, as in steps 2-3
+            foldAUCs[name] = cvLogisticAUC(table, label, tasks, model = makeModel())
+            print(f"    Mean fold AUC {foldAUCs[name].mean():.3f} (SD {foldAUCs[name].std():.3f}, {len(foldAUCs[name])} folds)")
+            score, permScores, pValue = permutationPValue(table, label, tasks, model = makeModel())
+            print(f"    Permutation test: AUC = {score:.3f}, chance AUC = {permScores.mean():.3f}, p = {pValue:.3f}")
+
+    # fold by fold, everything against the linear probe on the 150 logits
+    baseline = "150 logits, ridge"
+    print(f"\nFold by fold against {baseline} (same 50 folds):")
+    for name in foldAUCs:
+        if name != baseline:
+            difference = foldAUCs[name] - foldAUCs[baseline]
+            print(f"    {name:26s} mean AUC difference = {difference.mean():+.3f}, better in {(difference > 0).sum()} of {len(difference)} folds")
+
+    plotPrediction(
+        y, meanProbs, label,
+        title = f"{phase.capitalize()} ECG: predicting {label} ({y.sum()}+ / {(y == 0).sum()}-), "
+                f"ridge logistic regression and XGBoost, out of fold (10 x 5 fold CV)",
+        outputPath = base_path / "Images" / f"prediction_{phase}_{label}.png")
+
+    # kernel density of one model (set bestModel to any of the four names above): how far apart are label+ and label-?
+    # Probability averaged over the 10 repeats, each from a model that did not see that person.
+    bestModel = "150 logits, ridge"
+    plotPredictionDensity(
+        y, meanProbs[bestModel], label,
+        title = f"{phase.capitalize()} ECG, {bestModel}: out of fold predicted probability (mean of 10 repeats)",
+        outputPath = base_path / "Images" / f"prediction_density_{phase}_{label}.png")
+
+    # which of the 150 classes XGBoost uses (out of fold SHAP, same 50 folds)
+    importance = xgboostImportance(logitTable, label)
+    importancePath = base_path / "csv" / f"ScienceDB_xgboost_importance_{phase}_{label}.csv"
+    importance.to_csv(importancePath)
+    print(f"\nXGBoost on the 150 logits, top 20 classes by mean |SHAP| (full table saved to {importancePath}):")
+    print("    direction_r > 0: higher logit pushes towards ANOCA+; used_in_folds: share of the 50 models that split on it")
+    print(importance.head(20).round(3).to_string())
+
+"""
+Prediction of ANOCA (63+ / 34-, recovery 62+ / 34-): 150 logits vs 1024 embeddings, ridge and XGBoost,
+out of fold over 10 x 5 fold CV (same folds for every model). AUROC and Brier from the figures
+Images/prediction_{phase}_ANOCA.png (AUROC of the probability averaged over the 10 repeats, so slightly optimistic).
+
+                    150 logits              1024 embeddings
+                    ridge      XGBoost      ridge      XGBoost
+    AUROC
+    Rest            0.65       0.61         0.67       0.68
+    Stress          0.71       0.70         0.75       0.65
+    Recovery        0.68       0.67         0.73       0.63
+    Brier (lower is better; always predicting the prevalence: 0.226)
+    Rest            0.222      0.244        0.214      0.214
+    Stress          0.211      0.210        0.196      0.227
+    Recovery        0.215      0.222        0.199      0.224
+
+    150 logits, ridge, mean fold AUC and permutation p (from steps 2-3 above):
+    rest 0.643 (p 0.030), stress 0.685 (p 0.020), recovery 0.659 (p 0.015)
+
+What it shows:
+    - Ridge on the embeddings is the highest in stress and recovery and has the lowest Brier score in all phases.
+      Stress is the best phase (0.75).
+    - XGBoost never clearly beats ridge, and on the embeddings it is the worst model in stress and recovery
+      (shallow trees on 1024 features with ~77 training people overfit). A linear readout is enough.
+    - Stress, ridge on the embeddings (prediction_density_stress_ANOCA.png): most ANOCA+ sit at 0.75-0.95, but
+      about half of the ANOCA- sit at 0.6-0.75 among them, and ~a dozen ANOCA+ sit at 0.2-0.5. The model separates
+      a subgroup, not the whole cohort.
+
+150 logits vs 1024 embeddings:
+    - The embeddings are ahead by 0.02-0.05 AUROC (rest +0.02, stress +0.04, recovery +0.05).
+    - The 95% CI of an AUROC around 0.7 with 63 / 34 people is about +-0.10 (Hanley-McNeil SE ~0.05), so each
+      model's CI covers the other model's AUROC in every phase. The gap is well inside the noise and has not been
+      shown to be real (that needs a paired test on the same people, e.g. a paired bootstrap of the AUROC difference
+      or the fold by fold wins, ~25 of 50 = a tie).
+    - The 150 logits are interpretable: every input is a named ECG finding (T wave abnormality, conduction delay,
+      early repolarization, ...), so the model can be explained, checked against the ECG and turned into measurable
+      biomarkers (deterministic functions in NEXT_STEPS.md). The 1024 embedding dimensions have no meaning on their own.
+    - So unless the embeddings perform markedly better (a paired CI of the difference that excludes 0, and a gain
+      that is clinically relevant, not 0.02-0.05), the 150 logits are the better path: almost the same performance,
+      and the model can be explained. The embeddings stay as a sensitivity analysis / upper bound, and are revisited
+      with more data (NYU), where a real gap would show up with narrower CIs.
+    - Picking the best of 4 models x 3 phases on the same 97 people inflates the top AUROC, so the primary model
+      (150 logits, ridge) is fixed now, before more comparisons.
 """
