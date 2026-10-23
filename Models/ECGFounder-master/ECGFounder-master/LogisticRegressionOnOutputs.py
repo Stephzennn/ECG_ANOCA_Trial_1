@@ -400,3 +400,29 @@ odds of ANOCA in every phase and reached significance in recovery (OR 0.51 per S
 A higher early repolarization logit went with lower odds of ANOCA in stress (OR 0.44, 0.20-0.98, p = 0.043).
 
 """
+
+"""
+Are the ECGFounder output classes orthogonal? No (one shared backbone, and ECG findings overlap clinically).
+
+All 150 classes (person logits, Spearman r):
+                                       Rest   Stress  Recovery
+    Mean |r| between classes           0.31   0.27    0.27
+    Pairs with |r| > 0.7               359    259     271
+    PCA components for 90% variance    19     19      19
+
+The 14 biomarkers:
+                                       Rest   Stress  Recovery
+    Mean |r|                           0.20   0.20    0.20
+    Max |r|                            0.73   0.70    0.68
+    Pairs with |r| > 0.5 (of 91)       2      2       3
+    Highest VIF (REPOLARIZATION ABN.)  5.4    5.4     4.5
+
+    VIF = variance inflation factor, how much collinearity inflates a coefficient's variance (warning at 5-10).
+    REPOLARIZATION ABNORMALITY ~5: its sign flipped in every multivariable model, so don't interpret it.
+    LVH voltage ~4 and T wave abnormality ~3: moderate, explains their wide CIs. All others < 3.
+    The main findings (conduction delay, early repolarization) are on low VIF biomarkers.
+
+ECGFounder output logits are correlated by design (150 classes, about 19 effective dimensions); we reduced
+this to 14 clinically distinct biomarkers (maximum |r| = 0.73, VIF <= 5.4).
+
+"""
